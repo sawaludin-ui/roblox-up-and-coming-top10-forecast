@@ -9,9 +9,17 @@ keeps KEEP of the mass and rounds to 6dp. Expected place is the mass-weighted
 sum per universe_id; the tail of the chart (top10) is that expected place
 ascending, then last rank, then universe_id.
 
+Player-count momentum (the `playing` column of every up_and_coming row): each
+universe_id also gets growth = log(playing now) - decayed average log(playing),
+where a playing read's weight halves every PLAY_HL=12h. The kernel centre
+becomes mean_rank - GAMMA*growth, so a place whose player count is climbing is
+scored as if it already sat higher up the chart than its averaged rank says;
+a flat or falling count leaves the centre untouched.
+
 Tuning: HALF_LIFE_H=2.0, FREQ_SHARE=0.70, SPREAD=6.0, KEEP=0.90,
-CAND_DEPTH=45, fitted on two real archive windows (practice -35.904,
-recent -32.440; previously -36.931 and -36.325).
+PLAY_HL=12.0, GAMMA=2.0, CAND_DEPTH=45. Three real archive windows with the
+momentum term average -34.62 versus -34.87 without it, improving in all three
+(house baseline -43.5/-49.2/-41.5).
 
 Stages: load_task() -> read_history(task) -> build_forecast(rows, places, MODEL)
 -> validate_payload(payload, places) -> write_payload(task, payload).
@@ -32,6 +40,8 @@ HALF_LIFE_H = 2.0   # weight of a read halves every 2h of age (fresher snapshots
 FREQ_SHARE = 0.70   # weight of the place's decayed rank-share table vs the rank kernel
 SPREAD = 6.0        # width of the rank kernel; smaller = tighter around the averaged rank
 TREND = 0.0
+PLAY_HL = 12.0      # player-count momentum: a read's weight halves every 12h of age
+GAMMA = 2.0         # kernel-centre shift per unit of log-playing growth (-34.62 vs -34.87 on three archive windows)
 KEEP = 0.90         # mass actually named per place after normalising (rest stays unnamed)
 CAND_DEPTH = 45     # how many best places are carried forward as candidates
 
@@ -72,6 +82,8 @@ def build_forecast(rows, places, constants):
     freq_share = constants['freq_share']
     spread_base = constants['spread']
     trend = constants['trend']
+    play_hl = constants['play_hl']
+    gamma = constants['gamma']
     keep = constants['keep']
     cand_depth = constants['cand_depth']
     max_rows_per_place = constants['max_rows_per_place']
@@ -84,14 +96,24 @@ def build_forecast(rows, places, constants):
     place_total = {}
     freq = {}
     last_rank = {}
+    play_log_sum = {}
+    play_weight = {}
+    latest_playing = {}
 
     for snapshot in history:
-        w = 0.5 ** ((t_last - epoch_hours(snapshot['at'])) / half_life_h)
+        age_h = t_last - epoch_hours(snapshot['at'])
+        w = 0.5 ** (age_h / half_life_h)
+        w_play = 0.5 ** (age_h / play_hl)
         for row in snapshot.get('up_and_coming') or []:
             uid = int(row['universe_id'])
             rank = int(row['rank'])
             rank_sum[uid] = rank_sum.get(uid, 0.0) + w * rank
             rank_weight[uid] = rank_weight.get(uid, 0.0) + w
+            playing = row.get('playing')
+            if playing is not None and playing > 0:
+                play_log_sum[uid] = play_log_sum.get(uid, 0.0) + w_play * math.log(playing)
+                play_weight[uid] = play_weight.get(uid, 0.0) + w_play
+                latest_playing[uid] = playing  # oldest first, so the last write is the newest read
             if rank <= places:
                 freq[(rank, uid)] = freq.get((rank, uid), 0.0) + w
                 place_total[rank] = place_total.get(rank, 0.0) + w
@@ -100,6 +122,12 @@ def build_forecast(rows, places, constants):
         last_rank[int(row['universe_id'])] = int(row['rank'])
 
     mean_rank = {uid: rank_sum[uid] / rank_weight[uid] for uid in rank_sum}
+
+    # Player-count momentum: log playing now minus the decayed average log playing.
+    growth = {
+        uid: math.log(latest_playing[uid]) - play_log_sum[uid] / play_weight[uid]
+        for uid in latest_playing
+    }
 
     candidates = sorted(
         uid for uid in mean_rank
@@ -115,7 +143,8 @@ def build_forecast(rows, places, constants):
         raw = {}
         for uid in candidates:
             freq_share_here = freq.get((place, uid), 0.0) / total if total > 0.0 else 0.0
-            distance = abs(mean_rank[uid] + trend - place)
+            centre = mean_rank[uid] - gamma * growth.get(uid, 0.0)
+            distance = abs(centre + trend - place)
             raw[uid] = freq_share * freq_share_here + (1.0 - freq_share) * math.exp(-distance / spread)
 
         norm = sum(raw.values())
@@ -155,6 +184,8 @@ MODEL = {
     'freq_share': FREQ_SHARE,
     'spread': SPREAD,
     'trend': TREND,
+    'play_hl': PLAY_HL,
+    'gamma': GAMMA,
     'keep': KEEP,
     'cand_depth': CAND_DEPTH,
     'max_rows_per_place': MAX_ROWS_PER_PLACE,

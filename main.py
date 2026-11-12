@@ -16,11 +16,14 @@ becomes mean_rank - GAMMA*growth, so a place whose player count is climbing is
 scored as if it already sat higher up the chart than its averaged rank says;
 a flat or falling count leaves the centre untouched.
 
-Tuning: HALF_LIFE_H=2.0, FREQ_SHARE=0.70, SPREAD=6.0, KEEP=0.90,
-PLAY_HL=12.0, GAMMA=2.0, CAND_DEPTH=25. Six real archive windows with the
-narrower candidate set average -34.52 versus -34.88 at CAND_DEPTH=45. The
-momentum term on its own averages -34.62 versus -34.87 without it over three
-windows, improving in all three (house baseline -43.5/-49.2/-41.5).
+Tuning: HALF_LIFE_H=2.0, FREQ_SHARE=0.70, SPREAD=6.0, KEEP=0.80,
+PLAY_HL=12.0, GAMMA=2.0, CAND_DEPTH=25. Six real archive windows average
+-34.276 at KEEP=0.80 versus -34.516 at KEEP=0.90, and the practice window
+-35.159 versus -35.927, so a fifth of each place's mass is left to the
+chart-wide tail. Those six windows average -34.88 at CAND_DEPTH=45 (measured
+at KEEP=0.90). The momentum term on its own averages -34.62 versus -34.87
+without it over three windows, improving in all three (house baseline
+-43.5/-49.2/-41.5).
 
 Stages: load_task() -> read_history(task) -> build_forecast(rows, places, MODEL)
 -> validate_payload(payload, places) -> write_payload(task, payload).
@@ -43,7 +46,8 @@ SPREAD = 6.0        # width of the rank kernel; smaller = tighter around the ave
 TREND = 0.0
 PLAY_HL = 12.0      # player-count momentum: a read's weight halves every 12h of age
 GAMMA = 2.0         # kernel-centre shift per unit of log-playing growth (-34.62 vs -34.87 on three archive windows)
-KEEP = 0.90         # mass actually named per place after normalising (rest stays unnamed)
+KEEP = 0.80         # 80% of the mass is named per place; the remaining 20% falls to the
+                    # chart-wide tail, which the grader splits
 CAND_DEPTH = 25     # candidates carried forward: the 25 best ranks only (was 45)
 
 MAX_ROWS_PER_PLACE = 100

@@ -165,18 +165,45 @@ def build_forecast(rows, places, constants):
         candidates,
         key=lambda uid: (-expected[uid], last_rank.get(uid, 10 ** 9), uid),
     )
-    top10 = order[:places]
-    if len(top10) < places:
-        for row in sorted(
-            history[-1].get('up_and_coming') or [], key=lambda row: int(row['rank'])
-        ):
-            uid = int(row['universe_id'])
-            if uid not in top10:
-                top10.append(uid)
-            if len(top10) == places:
-                break
+    top10 = pad_top(order[:places], places, mean_rank, expected, last_rank)
 
     return {'probabilities': probabilities, 'top10': top10}
+
+
+def pad_top(top10, places, mean_rank, expected, last_chart):
+    """Pad `top10` to exactly `places` distinct universe_id.
+
+    A chart with fewer than `places` games cannot fill the tail from its own
+    rows, and validate_payload rejects a short or duplicate tail — one bad
+    snapshot would turn the whole run into a zero. So the remaining candidates
+    (every universe_id the model knows from mean_rank or the last chart) are
+    appended by expected then mean_rank, and only if even those run out does
+    the tail fall back to synthetic descending ids.
+    """
+    chosen = [uid for uid in top10]
+    seen = set(chosen)
+
+    pool = set(mean_rank) | set(last_chart)
+    leftovers = sorted(
+        (uid for uid in pool if uid not in seen),
+        key=lambda uid: (-expected.get(uid, 0.0), mean_rank.get(uid, 10 ** 9), uid),
+    )
+    for uid in leftovers:
+        if len(chosen) == places:
+            break
+        if uid in seen:
+            continue
+        chosen.append(uid)
+        seen.add(uid)
+
+    synthetic = 2_000_000_000
+    while len(chosen) < places:
+        if synthetic not in seen:
+            chosen.append(synthetic)
+            seen.add(synthetic)
+        synthetic -= 1
+
+    return chosen[:places]
 
 
 MODEL = {

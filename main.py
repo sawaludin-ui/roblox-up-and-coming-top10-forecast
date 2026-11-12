@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """roblox-up-and-coming-forecast-01: decayed place-frequency model with a chart-wide tail.
 
-Model: per snapshot, rank evidence is exponential-decayed with a 6h half-life
+Model: per snapshot, rank evidence is exponential-decayed with a 2h half-life
 (0.5 ** (age_h / HALF_LIFE_H)). Each place mixes that place's share of decayed
 rank weight (FREQ_SHARE) with a Gaussian-like distance kernel over the
 time-averaged rank (1 - FREQ_SHARE, sigma = SPREAD hours), normalises the mix,
 keeps KEEP of the mass and rounds to 6dp. Expected place is the mass-weighted
 sum per universe_id; the tail of the chart (top10) is that expected place
 ascending, then last rank, then universe_id.
+
+Tuning: HALF_LIFE_H=2.0, FREQ_SHARE=0.70, SPREAD=6.0, KEEP=0.90,
+CAND_DEPTH=45, fitted on two real archive windows (practice -35.904,
+recent -32.440; previously -36.931 and -36.325).
 
 Stages: load_task() -> read_history(task) -> build_forecast(rows, places, MODEL)
 -> validate_payload(payload, places) -> write_payload(task, payload).
@@ -24,12 +28,12 @@ from datetime import datetime
 INPUT_DIR = os.environ.get('MAKEFUN_INPUT_DIR') or '/input'
 OUTPUT_DIR = os.environ.get('MAKEFUN_OUTPUT_DIR') or '/output'
 
-HALF_LIFE_H = 6.0
-FREQ_SHARE = 0.70
-SPREAD = 12.0
+HALF_LIFE_H = 2.0   # weight of a read halves every 2h of age (fresher snapshots dominate)
+FREQ_SHARE = 0.70   # weight of the place's decayed rank-share table vs the rank kernel
+SPREAD = 6.0        # width of the rank kernel; smaller = tighter around the averaged rank
 TREND = 0.0
-KEEP = 0.80
-CAND_DEPTH = 45
+KEEP = 0.90         # mass actually named per place after normalising (rest stays unnamed)
+CAND_DEPTH = 45     # how many best places are carried forward as candidates
 
 MAX_ROWS_PER_PLACE = 100
 

@@ -17,9 +17,10 @@ scored as if it already sat higher up the chart than its averaged rank says;
 a flat or falling count leaves the centre untouched.
 
 Tuning: HALF_LIFE_H=2.0, FREQ_SHARE=0.70, SPREAD=6.0, KEEP=0.90,
-PLAY_HL=12.0, GAMMA=2.0, CAND_DEPTH=45. Three real archive windows with the
-momentum term average -34.62 versus -34.87 without it, improving in all three
-(house baseline -43.5/-49.2/-41.5).
+PLAY_HL=12.0, GAMMA=2.0, CAND_DEPTH=25. Six real archive windows with the
+narrower candidate set average -34.52 versus -34.88 at CAND_DEPTH=45. The
+momentum term on its own averages -34.62 versus -34.87 without it over three
+windows, improving in all three (house baseline -43.5/-49.2/-41.5).
 
 Stages: load_task() -> read_history(task) -> build_forecast(rows, places, MODEL)
 -> validate_payload(payload, places) -> write_payload(task, payload).
@@ -43,7 +44,7 @@ TREND = 0.0
 PLAY_HL = 12.0      # player-count momentum: a read's weight halves every 12h of age
 GAMMA = 2.0         # kernel-centre shift per unit of log-playing growth (-34.62 vs -34.87 on three archive windows)
 KEEP = 0.90         # mass actually named per place after normalising (rest stays unnamed)
-CAND_DEPTH = 45     # how many best places are carried forward as candidates
+CAND_DEPTH = 25     # candidates carried forward: the 25 best ranks only (was 45)
 
 MAX_ROWS_PER_PLACE = 100
 

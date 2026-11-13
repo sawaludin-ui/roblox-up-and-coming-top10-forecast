@@ -1,36 +1,15 @@
 #!/usr/bin/env python3
-"""roblox-up-and-coming-forecast-01: decayed place-frequency model with a chart-wide tail.
+"""roblox-up-and-coming-forecast-01: causal transition forecast, stdlib only.
 
-Model: per snapshot, rank evidence is exponential-decayed with a 2h half-life
-(0.5 ** (age_h / HALF_LIFE_H)). Each place mixes that place's share of decayed
-rank weight (FREQ_SHARE) with a Gaussian-like distance kernel over the
-time-averaged rank (1 - FREQ_SHARE, sigma = SPREAD hours), normalises the mix,
-keeps KEEP of the mass and rounds to 6dp. Expected place is the mass-weighted
-sum per universe_id; the tail of the chart (top10) is that expected place
-ascending, then last rank, then universe_id.
+The primary model learns 6--72h historical rank transitions using current
+rank, rank momentum, log-player growth and a weak relative-ID feature.
+Only supplied pre-cutoff history is used. See age_transition_model.py and
+transition_model.py; README.md records comparative validation and limitations.
+The original decay model is retained for sparse-history fallback.
 
-Player-count momentum (the `playing` column of every up_and_coming row): each
-universe_id also gets growth = log(playing now) - decayed average log(playing),
-where a playing read's weight halves every PLAY_HL=12h. The kernel centre
-becomes mean_rank - GAMMA*growth, so a place whose player count is climbing is
-scored as if it already sat higher up the chart than its averaged rank says;
-a flat or falling count leaves the centre untouched.
-
-Tuning: HALF_LIFE_H=2.0, FREQ_SHARE=0.70, SPREAD=6.0, KEEP=0.80,
-PLAY_HL=12.0, GAMMA=2.0, CAND_DEPTH=25. Six real archive windows average
--34.276 at KEEP=0.80 versus -34.516 at KEEP=0.90, and the practice window
--35.159 versus -35.927, so a fifth of each place's mass is left to the
-chart-wide tail. Those six windows average -34.88 at CAND_DEPTH=45 (measured
-at KEEP=0.90). The momentum term on its own averages -34.62 versus -34.87
-without it over three windows, improving in all three (house baseline
--43.5/-49.2/-41.5).
-
-Stages: load_task() -> read_history(task) -> build_forecast(rows, places, MODEL)
--> validate_payload(payload, places) -> write_payload(task, payload).
-
-Python 3.13, standard library only. Reads /input/task.json and /input/history.ndjson
-(oldest first) and writes {probabilities, top10} to /output/<task.output>.
-MAKEFUN_INPUT_DIR / MAKEFUN_OUTPUT_DIR stand in for /input and /output off the grader.
+Stages: load_task -> read_history -> build_forecast -> validate_payload -> write_payload.
+Reads /input/task.json and /input/history.ndjson; writes /output/<task.output>.
+MAKEFUN_INPUT_DIR and MAKEFUN_OUTPUT_DIR can override those directories.
 """
 import json
 import math
@@ -78,11 +57,26 @@ def read_history(task):
             line = line.strip()
             if line:
                 rows.append(json.loads(line))
+    cutoff = task.get('history_until')
+    if cutoff:
+        limit = epoch_hours(cutoff)
+        rows = [row for row in rows if epoch_hours(row['at']) < limit]
     return rows
 
 
 def build_forecast(rows, places, constants):
-    """Decayed place-frequency model: the {probabilities, top10} payload."""
+    """Learn 6--72h transitions solely from outcomes inside supplied history."""
+    if not rows:
+        raise ValueError('No observations before history_until')
+    span = epoch_hours(rows[-1]['at']) - epoch_hours(rows[0]['at'])
+    if places != 10 or span < 6:
+        return build_decay_forecast(rows, places, constants)
+    from age_transition_model import forecast
+    return forecast(rows)
+
+
+def build_decay_forecast(rows, places, constants):
+    """Original decay kernel, retained for sparse-history fallback."""
     half_life_h = constants['half_life_h']
     freq_share = constants['freq_share']
     spread_base = constants['spread']
@@ -226,13 +220,25 @@ MODEL = {
 
 def validate_payload(payload, places):
     """Refuse to write a forecast that breaks the output contract."""
-    mass = {}
+    assert set(payload) == {'probabilities', 'top10'}, 'Unexpected payload keys'
+    assert isinstance(payload['probabilities'], list), 'probabilities must be a list'
+    mass, count, seen = {}, {}, set()
     for row in payload['probabilities']:
-        mass[row['place']] = mass.get(row['place'], 0.0) + row['p']
+        assert set(row) == {'universe_id', 'place', 'p'}, 'Unexpected probability keys'
+        uid, place, p = row['universe_id'], row['place'], row['p']
+        assert type(uid) is int and uid > 0, 'Invalid universe_id'
+        assert type(place) is int and 1 <= place <= places, 'Invalid place'
+        assert type(p) in (int, float) and math.isfinite(p) and 0 <= p <= 1, 'Invalid p'
+        assert (uid, place) not in seen, 'Duplicate game/place'
+        seen.add((uid, place))
+        count[place] = count.get(place, 0) + 1
+        assert count[place] <= 100, 'Too many rows at one place'
+        mass[place] = mass.get(place, 0.0) + p
     for place, total in sorted(mass.items()):
         assert total <= 1.0, 'place {} carries p mass {} > 1.0'.format(place, total)
 
     top10 = payload['top10']
+    assert all(type(uid) is int and uid > 0 for uid in top10), 'Invalid top10 ids'
     assert len(top10) == places, 'top10 has {} entries, expected {}'.format(len(top10), places)
     assert len(set(top10)) == places, 'top10 has {} unique universe_id, expected {}'.format(
         len(set(top10)), places
